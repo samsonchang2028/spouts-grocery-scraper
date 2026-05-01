@@ -1,0 +1,23 @@
+{
+    "name": "slo-grocery-scraper",
+    "version": "1.0.0",
+    "description": "Daily grocery price scraper for San Luis Obispo stores",
+    "type": "module",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js",
+        "test": "vitest run",
+        "test:watch": "vitest"
+    },
+    "dependencies": {
+        "@supabase/supabase-js": "2.49.4",
+        "node-cron": "3.0.3",
+        "playwright": "1.52.0",
+        "playwright-extra": "4.3.6",
+        "puppeteer-extra-plugin-stealth": "2.11.2"
+    },
+    "devDependencies": {
+        "fast-check": "3.23.2",
+        "vitest": "3.2.3"
+    }
+}
