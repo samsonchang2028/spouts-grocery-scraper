@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import cron from 'node-cron';
 import { scrape } from './stores/sprouts.js';
 import { normalize, parsePrice } from './utils/normalize.js';

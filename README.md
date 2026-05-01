@@ -330,5 +330,16 @@ Integration tests auto-skip when `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, an
 | `puppeteer-extra-plugin-stealth` | 2.11.2 | Anti-bot-detection evasions |
 | `@supabase/supabase-js` | 2.49.4 | Supabase database client |
 | `node-cron` | 3.0.3 | Cron scheduling |
+| `dotenv` | — | Loads `.env` into `process.env` |
 | `fast-check` *(dev)* | 3.23.2 | Property-based testing |
 | `vitest` *(dev)* | 3.2.3 | Test runner |
+
+---
+
+## Debugging history
+
+See [MEMORY.md](./MEMORY.md) for a log of bugs encountered and how they were fixed, including:
+
+- Why the original DOM scraping approach failed and how it was replaced with GraphQL interception
+- How `dotenv` was added to fix missing environment variable errors
+- Notes on the Instacart GraphQL response structure for future maintenance

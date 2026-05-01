@@ -10,30 +10,16 @@ chromium.use(StealthPlugin());
  */
 export const TARGET_LIST = [
     'eggs',
-    'whole milk',
-    'chicken breast',
-    'bread',
-    'bananas',
-    'greek yogurt',
-    'pasta',
-    'canned tomatoes',
-    'orange juice',
-    'cheddar cheese',
-    'butter',
-    'rice',
-    'baby spinach',
-    'ground beef',
-    'oat milk',
+    'whole milk'
 ];
 
 const USER_AGENT =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+const BASE_URL = 'https://shop.sprouts.com';
+
 /**
  * Waits a random delay between min and max milliseconds.
- * @param {number} min
- * @param {number} max
- * @returns {Promise<void>}
  */
 function randomDelay(min = 2000, max = 3000) {
     const ms = Math.floor(Math.random() * (max - min + 1)) + min;
@@ -41,8 +27,43 @@ function randomDelay(min = 2000, max = 3000) {
 }
 
 /**
- * Launches a stealth Playwright browser, searches Sprouts for each item in
- * TARGET_LIST, and returns an array of raw product objects.
+ * Extracts RawProduct objects from Instacart GraphQL Items responses.
+ *
+ * @param {object[]} itemsResponses - Array of parsed Items GraphQL response bodies
+ * @param {string} sourceUrl - The search URL used
+ * @returns {Array<{name, price, originalPrice, sourceUrl}>}
+ */
+function extractProducts(itemsResponses, sourceUrl) {
+    const products = [];
+    for (const response of itemsResponses) {
+        const items = response?.data?.items;
+        if (!Array.isArray(items)) continue;
+        for (const item of items) {
+            const name = item.name || '';
+
+            // Price data lives at item.price.viewSection.itemCard
+            const itemCard = item?.price?.viewSection?.itemCard;
+            // priceString: current (possibly sale) price e.g. "$6.99"
+            const price = itemCard?.priceString || '';
+            // plainFullPriceString: original price when on sale e.g. "$7.99", null otherwise
+            const originalPrice = itemCard?.plainFullPriceString || null;
+
+            const itemUrl = item.evergreenUrl
+                ? `${BASE_URL}/store/sprouts/products/${item.evergreenUrl}`
+                : sourceUrl;
+
+            if (name && price) {
+                products.push({ name, price, originalPrice, sourceUrl: itemUrl });
+            }
+        }
+    }
+    return products;
+}
+
+/**
+ * Launches a stealth Playwright browser, searches shop.sprouts.com for each
+ * item in TARGET_LIST by intercepting the Instacart GraphQL API responses,
+ * and returns an array of raw product objects.
  *
  * @returns {Promise<Array<{name: string, price: string, originalPrice: string|null, sourceUrl: string}>>}
  */
@@ -67,85 +88,52 @@ export async function scrape() {
 
         for (let i = 0; i < TARGET_LIST.length; i++) {
             const item = TARGET_LIST[i];
-            const searchUrl = `https://www.sprouts.com/search?query=${encodeURIComponent(item)}`;
+            const searchUrl = `${BASE_URL}/store/sprouts/s?k=${encodeURIComponent(item)}`;
 
             try {
-                await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                const itemsResponses = [];
 
-                // Wait for product cards to appear in the DOM
-                await page.waitForSelector('[data-testid="product-card"], .product-card, [class*="ProductCard"]', {
-                    timeout: 15000,
-                });
+                // Use route interception — fires synchronously before the response is consumed,
+                // so we never miss a response regardless of timing.
+                await page.route('**/graphql**', async (route, request) => {
+                    const response = await route.fetch();
+                    const url = request.url();
 
-                // Extract product data from all cards on the page
-                const products = await page.evaluate((sourceUrl) => {
-                    // Try multiple possible selectors for product cards
-                    const cardSelectors = [
-                        '[data-testid="product-card"]',
-                        '.product-card',
-                        '[class*="ProductCard"]',
-                        '[class*="product-card"]',
-                    ];
-
-                    let cards = [];
-                    for (const sel of cardSelectors) {
-                        const found = document.querySelectorAll(sel);
-                        if (found.length > 0) {
-                            cards = Array.from(found);
-                            break;
-                        }
+                    if (url.includes('operationName=Items')) {
+                        try {
+                            const body = await response.json().catch(() => null);
+                            if (body?.data?.items) {
+                                itemsResponses.push(body);
+                            }
+                        } catch (e) { }
                     }
 
-                    return cards.map((card) => {
-                        // Product name
-                        const nameEl =
-                            card.querySelector('[data-testid="product-name"]') ||
-                            card.querySelector('[class*="ProductName"]') ||
-                            card.querySelector('[class*="product-name"]') ||
-                            card.querySelector('h2') ||
-                            card.querySelector('h3') ||
-                            card.querySelector('a[href*="/shop/products/"]');
-                        const name = nameEl ? nameEl.textContent.trim() : '';
+                    await route.fulfill({ response });
+                });
 
-                        // Current (sale) price
-                        const priceEl =
-                            card.querySelector('[data-testid="product-price"]') ||
-                            card.querySelector('[class*="SalePrice"]') ||
-                            card.querySelector('[class*="sale-price"]') ||
-                            card.querySelector('[class*="CurrentPrice"]') ||
-                            card.querySelector('[class*="current-price"]') ||
-                            card.querySelector('[aria-label*="price"]') ||
-                            card.querySelector('[class*="Price"]');
-                        const price = priceEl ? priceEl.textContent.trim() : '';
+                await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-                        // Original (regular) price — only present when item is on sale
-                        const originalPriceEl =
-                            card.querySelector('[data-testid="original-price"]') ||
-                            card.querySelector('[class*="OriginalPrice"]') ||
-                            card.querySelector('[class*="original-price"]') ||
-                            card.querySelector('[class*="RegularPrice"]') ||
-                            card.querySelector('[class*="regular-price"]') ||
-                            card.querySelector('s') ||
-                            card.querySelector('del');
-                        const originalPrice = originalPriceEl ? originalPriceEl.textContent.trim() : null;
+                // Wait for lazy-loaded Items calls to complete
+                await page.waitForTimeout(5000);
 
-                        return { name, price, originalPrice, sourceUrl };
-                    });
-                }, searchUrl);
+                // Remove route handler before next iteration
+                await page.unroute('**/graphql**');
+
+                const products = extractProducts(itemsResponses, searchUrl);
 
                 if (products.length === 0) {
-                    console.warn(`[sprouts] No product cards found for "${item}"`);
+                    console.warn(`[sprouts] No products found for "${item}"`);
                 } else {
-                    // Only push products with a non-empty name
-                    const valid = products.filter((p) => p.name);
-                    results.push(...valid);
-                    console.log(`[sprouts] "${item}" → ${valid.length} product(s) found`);
+                    results.push(...products);
+                    console.log(`[sprouts] "${item}" → ${products.length} product(s) found`);
                 }
             } catch (err) {
                 console.warn(`[sprouts] Error processing "${item}": ${err.message}`);
+                // Clean up route handler on error
+                await page.unroute('**/graphql**').catch(() => { });
             }
 
-            // Random delay between requests (skip delay after last item)
+            // Random delay between requests (skip after last item)
             if (i < TARGET_LIST.length - 1) {
                 await randomDelay(2000, 3000);
             }
