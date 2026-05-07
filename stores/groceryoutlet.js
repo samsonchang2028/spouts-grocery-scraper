@@ -3,28 +3,31 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 
 chromium.use(StealthPlugin());
 
-const MERCHANT_ID = 2906;
-// Weekly ad URL — triggers flipp/data API which gives us the current flyer ID
 const WEEKLY_AD_URL = 'https://flipp.com/en-us/san-luis-obispo-ca/weekly_ad/7916814-grocery-outlet-weekly?postal_code=93401';
-
-const USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-];
+const MERCHANT_ID = 2906;
 
 export async function scrape() {
     let browser;
     try {
-        browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+        // Non-headless — Flipp detects headless and serves an error page.
+        // Use headless: 'new' if available, otherwise run visibly.
+        browser = await chromium.launch({
+            headless: false,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled'],
+        });
     } catch (err) {
         console.error('[groceryoutlet] Failed to launch browser:', err.message);
         throw err;
     }
 
     try {
-        const context = await browser.newContext({ userAgent: USER_AGENTS[0] });
+        const context = await browser.newContext({
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            viewport: { width: 1920, height: 1080 },
+        });
         const page = await context.newPage();
 
-        let flyerId = null;
+        let flyerRunId = null;
 
         await page.route('**/*', async (route, request) => {
             if (request.url().includes('wishabi.com') || request.url().includes('onelink.me')) {
@@ -37,7 +40,7 @@ export async function scrape() {
                 if (ct.includes('json') && request.url().includes('flippenterprise.net/api/flipp/data')) {
                     const body = await response.json().catch(() => null);
                     const flyer = body?.flyers?.find(f => f.merchant_id === MERCHANT_ID) ?? body?.flyers?.[0];
-                    if (flyer?.id) flyerId = flyer.id;
+                    if (flyer?.flyer_run_id) flyerRunId = flyer.flyer_run_id;
                 }
                 await route.fulfill({ response });
             } catch (_) {
@@ -46,33 +49,55 @@ export async function scrape() {
         });
 
         await page.goto(WEEKLY_AD_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await page.waitForTimeout(4000);
+        await page.waitForTimeout(6000);
 
-        if (!flyerId) {
-            console.warn('[groceryoutlet] Could not find flyer ID');
+        if (!flyerRunId) {
+            console.warn('[groceryoutlet] Could not find flyer_run_id');
             return [];
         }
 
-        const flyerUrl = `https://flipp.com/en-us/san-luis-obispo-ca/weekly_ad/${flyerId}-grocery-outlet-weekly?postal_code=93401`;
-        await page.goto(flyerUrl, { waitUntil: 'networkidle', timeout: 30000 });
-        await page.waitForTimeout(3000);
+        console.log(`[groceryoutlet] flyer_run_id: ${flyerRunId}`);
 
-        // Log what's on the page
-        const info = await page.evaluate(() => {
-            const selectors = [
-                '[data-type="item"]', '[itemid]', '[class*="flyer-item"]',
-                '[class*="item-"]', 'li[class*="item"]', '[role="button"]',
-                'button', 'a[href*="item"]',
-            ];
-            return selectors.map(sel => ({
-                sel,
-                count: document.querySelectorAll(sel).length,
-                sample: document.querySelector(sel)?.outerHTML?.slice(0, 150),
-            })).filter(r => r.count > 0);
-        });
+        // Use page.request so cookies/headers match the browser context
+        const itemsEndpoints = [
+            `https://dam.flippenterprise.net/api/flipp/flyer_runs/${flyerRunId}/flyer_items`,
+            `https://dam.flippenterprise.net/api/flipp/flyer_items?flyer_run_id=${flyerRunId}`,
+            `https://dam.flippenterprise.net/api/flipp/flyers/${flyerRunId}/flyer_items`,
+        ];
 
-        console.log('[groceryoutlet] page elements:', JSON.stringify(info, null, 2));
-        return [];
+        let items = null;
+        for (const url of itemsEndpoints) {
+            const res = await page.request.get(url).catch(() => null);
+            if (res && res.ok()) {
+                const body = await res.json().catch(() => null);
+                const arr = Array.isArray(body) ? body : body?.flyer_items ?? body?.items;
+                if (arr && arr.length > 0) {
+                    console.log(`[groceryoutlet] Found items via: ${url} (${arr.length})`);
+                    items = arr;
+                    console.log('[groceryoutlet] sample item keys:', Object.keys(arr[0]));
+                    console.log('[groceryoutlet] sample item:', JSON.stringify(arr[0]).slice(0, 500));
+                    break;
+                }
+            } else {
+                console.log(`[groceryoutlet] ${url} → ${res?.status() ?? 'network error'}`);
+            }
+        }
+
+        if (!items) return [];
+
+        const products = [];
+        for (const item of items) {
+            const name = item.name || item.description || '';
+            if (!name) continue;
+            let price = item.price_text || item.current_price || '';
+            if (!price && item.price != null) price = `$${Number(item.price).toFixed(2)}`;
+            if (!price) continue;
+            const originalPrice = item.original_price != null ? `$${Number(item.original_price).toFixed(2)}` : null;
+            products.push({ name, price, originalPrice, sourceUrl: WEEKLY_AD_URL });
+        }
+
+        console.log(`[groceryoutlet] Weekly ad → ${products.length} product(s) found`);
+        return products;
     } finally {
         if (browser) await browser.close();
     }

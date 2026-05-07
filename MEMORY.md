@@ -208,3 +208,100 @@ GROCERY_OUTLET_STORE_ID  (placeholder, scraper not yet built)
 - `.github/workflows/scrape.yml` — new
 - `GUIDE.md` — new user-facing setup guide
 - `.env.example` — updated with all new store ID vars
+
+
+---
+
+## [2026-05-07] Grocery Outlet scraper — Flipp weekly ad
+
+### Goal
+
+Build a scraper for Grocery Outlet (1314 Madonna Rd, SLO) using the Flipp weekly ad at `flipp.com`, since Grocery Outlet has no searchable online store.
+
+### What we tried and why it failed
+
+**Attempt 1 — Intercept bulk flyer_items API**
+
+Assumed Flipp would load all flyer items in a single JSON API call on page load (like Sprouts/Instacart does with GraphQL). Intercepted all JSON responses and looked for arrays with `name`/`description` fields.
+
+Result: Only got city/state/merchant listing data from `flippback.com`. No product data.
+
+Root cause: Flipp renders the flyer as a **static image/canvas**. It does NOT bulk-fetch item data on page load.
+
+**Attempt 2 — Fetch flyer_items endpoint directly**
+
+The `flipp/data` response contains `flyer_run_id`. Tried fetching:
+```
+https://dam.flippenterprise.net/flyer_runs/<flyer_run_id>/flyer_items
+```
+directly from inside `page.evaluate()`.
+
+Result: 401/403 — the endpoint requires auth tokens that are baked into Flipp's own requests and not accessible without them.
+
+**Attempt 3 — Navigate listing page to find flyer link**
+
+Used `https://flipp.com/en-us/san-luis-obispo-ca/flyers/grocery-outlet?postal_code=93401` as the entry point, tried to find and click the flyer link.
+
+Result: The listing page never triggers the `flipp/data` API call, so we never get the flyer ID. The `a[href*="grocery-outlet"]` selector found nothing.
+
+**Attempt 4 — Navigate directly to weekly ad URL**
+
+Used `https://flipp.com/en-us/san-luis-obispo-ca/weekly_ad/7916814-grocery-outlet-weekly?postal_code=93401`.
+
+Result: This DOES trigger `dam.flippenterprise.net/api/flipp/data` which returns `{ flyers: [{id, flyer_run_id, merchant_id, ...}] }`. Flyer ID confirmed as `7916814`. But still no item data in any intercepted response.
+
+**Crash bug**: `route.fetch()` throws on failed TLS connections (e.g. `wishabi.com` tracking pixels). Fixed by aborting known tracking domains and wrapping all `route.fetch()` calls in try/catch with `route.abort()` on error.
+
+### Current state
+
+The scraper can successfully:
+- Navigate to the weekly ad URL
+- Intercept `flipp/data` and extract the current flyer ID
+- Confirm the page loads correctly (URL stays on the weekly ad page)
+
+The scraper cannot yet:
+- Extract product names and prices
+
+### What needs to happen next
+
+Flipp only loads individual item data when a user **clicks** on an item in the flyer image. The popup that appears contains:
+- Product name in `h1`/`h2`
+- Price in `<flipp-price value="5.99">` (custom element, price is in the `value` attribute)
+- Original price possibly in a strikethrough/`[class*="original"]` element
+
+The correct approach (**Option A — click every item**) is:
+1. Navigate to the weekly ad URL
+2. Wait for the flyer canvas to render
+3. Find all clickable item elements (selector TBD — need to inspect DOM)
+4. Click each one, wait for `flipp-dialog` popup, extract name + price
+5. Press Escape to close, move to next item
+
+The blocker is identifying the correct CSS selector for clickable items on the flyer. The DOM inspection step was not completed before the session ended.
+
+### Key technical facts for next session
+
+- Working weekly ad URL: `https://flipp.com/en-us/san-luis-obispo-ca/weekly_ad/7916814-grocery-outlet-weekly?postal_code=93401` (ID `7916814` may expire — refresh weekly)
+- `flipp/data` API: `https://dam.flippenterprise.net/api/flipp/data?locale=en&postal_code=93401&sid=<session>`
+- Grocery Outlet merchant ID in Flipp: `2906`
+- Flyer run ID (current week): `1206408`
+- Must abort `wishabi.com` and `onelink.me` in route handler to prevent crashes
+- Use `route.fetch()` interception, not `page.on('response')` — the latter fires too late
+- `GROCERY_OUTLET_STORE_ID=eefcee75-d1f4-49c3-8a40-c59982d72287` is set in `.env`
+- Store seeded: `INSERT INTO stores (name, address) VALUES ('Grocery Outlet', '1314 Madonna Rd, San Luis Obispo, CA 93405')`
+- `stores/groceryoutlet.js` exists and is registered in `index.js` SCRAPERS array
+
+### To debug item selectors
+
+Add this to the scraper after navigating to the flyer page and waiting:
+
+```js
+const info = await page.evaluate(() => {
+    const selectors = ['a[href*="/item/"]', '[data-item-id]', '[class*="flyer-item"]', '[role="button"]'];
+    return selectors.map(sel => ({
+        sel,
+        count: document.querySelectorAll(sel).length,
+        sample: document.querySelector(sel)?.outerHTML?.slice(0, 200),
+    })).filter(r => r.count > 0);
+});
+console.log(JSON.stringify(info, null, 2));
+```

@@ -1,0 +1,6 @@
+{
+  "name": "env-checker",
+  "description": "Scans all source files for process.env references and reports any missing from .env.example.",
+  "tools": ["read", "grep", "write"],
+  "prompt": "Audit environment variable coverage.\n\nSteps:\n1. Read .env.example and collect every key defined there.\n2. Search all .js files (excluding node_modules) for process.env.VARIABLE_NAME patterns and collect every unique key.\n3. Compare and report:\n   - Missing from .env.example: referenced in code but not documented (must fix)\n   - Unused in code: in .env.example but never referenced (informational)\n4. If there are missing keys, offer to add them to .env.example with a placeholder value and a comment.\n\nOutput format:\n```\nENV CHECK RESULTS\n=================\nMissing from .env.example:\n  - NEW_VAR  →  found in stores/newstore.js\n\nUnused in code:\n  - NONE\n```\n\nIf everything is in sync, say so in one line."
+}

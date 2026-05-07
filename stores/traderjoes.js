@@ -7,18 +7,7 @@ export const TARGET_LIST = [
     'eggs',
     'whole milk',
     'chicken breast',
-    'bread',
-    'bananas',
-    'greek yogurt',
-    'pasta',
-    'canned tomatoes',
-    'orange juice',
-    'cheddar cheese',
-    'butter',
-    'rice',
-    'baby spinach',
-    'ground beef',
-    'oat milk',
+    
 ];
 
 const USER_AGENTS = [
@@ -69,14 +58,6 @@ export async function scrape() {
 
             try {
                 await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-
-                // Click the "Products" filter tab to show only products, not recipes
-                await page.waitForSelector('button[class*="SearchResults_sectionButton"], a[class*="SearchResults_sectionButton"]', {
-                    timeout: 10000,
-                }).catch(() => null);
-
-                const productsTab = await page.$('button:has-text("Products"), a:has-text("Products")');
-                if (productsTab) await productsTab.click();
 
                 await page.waitForSelector('article[class*="SearchResultCard"]', {
                     timeout: 15000,

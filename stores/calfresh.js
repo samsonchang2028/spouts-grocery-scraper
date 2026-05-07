@@ -54,10 +54,11 @@ export async function scrape() {
                 const priceEl = card.querySelector('span.redPrice');
                 if (!priceEl) return;
 
-                // Build price string from currency + amount spans
-                const currency = priceEl.querySelector('.currency')?.textContent?.trim() || '$';
-                const amount = priceEl.querySelector('.amount')?.textContent?.trim() || '';
-                const price = amount ? `${currency}${amount}` : priceEl.textContent.trim();
+                // Get the full text e.g. "$6.98/Lb." and extract just the number part
+                const fullText = priceEl.textContent?.trim() || '';
+                // Match a dollar amount like $6.98 or $12.98
+                const match = fullText.match(/\$[\d.]+/);
+                const price = match ? match[0] : '';
 
                 if (name && price) {
                     results.push({ name, price, originalPrice: null, sourceUrl });
