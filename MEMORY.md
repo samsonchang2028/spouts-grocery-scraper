@@ -135,3 +135,76 @@ The `variables` include `shopId`, `zoneId`, and `postalCode` — these are set a
 2. Look for `operationName=Items` in the captured URLs
 3. Inspect the response JSON for the `data.items` array
 4. Check `item.price.viewSection.itemCard` for price fields — if the path changes, update `extractProducts()` in `stores/sprouts.js`
+
+---
+
+## [2026-05-07] Multi-store expansion and GitHub Actions setup
+
+### Changes made this session
+
+**Anti-bot improvements to Sprouts scraper (`stores/sprouts.js`)**
+- Increased delay between requests from 2–3s to 8–15s (random)
+- Added rotating user agents (5 different browser signatures)
+- Switched from a single shared browser context to a **fresh context per item** — each search looks like a new browser session, preventing Sprouts from correlating requests
+- Added anti-bot detection logging: distinguishes between "blocked" (detects keywords like `access denied`, `captcha`, `robot`) and "no results found"
+
+**Cron schedule changed to weekly**
+- `index.js` cron changed from `0 6 * * *` (daily) to `0 6 * * 0` (every Sunday 6am)
+- Added `--run-once` flag: when `node index.js --run-once` is passed, it runs one scrape and exits (used by GitHub Actions)
+
+**Refactored `index.js` for multi-store support**
+- `runScrape()` now loops over a `SCRAPERS` array — each entry has `{ name, scrape, storeIdEnv }`
+- If a store's env var is not set, it is skipped with a warning rather than crashing
+- Adding a new store = one line in the `SCRAPERS` array + a new scraper file
+
+**New scrapers added**
+
+| File | Store | Method |
+|---|---|---|
+| `stores/smartandfinal.js` | Smart & Final (1321 Johnson Ave, SLO) | Playwright DOM scraping — `article[class*="ProductCard"]`, `h3[class*="ProductCardNameWrapper"]`, `[data-testid*="productCardPricing"]` |
+| `stores/calfresh.js` | California Fresh Market (771 E. Foothill Blvd, SLO) | Playwright DOM scraping of weekly ad at `californiafresh.market` — `.e-loop-item`, `h2.elementor-heading-title`, `span.redPrice` |
+| `stores/traderjoes.js` | Trader Joe's (3977 S Higuera St, SLO) | Playwright DOM scraping — clicks "Products" filter tab first, then scrapes `article[class*="SearchResultCard"]`. Note: TJ's only lists a subset of products on their website, expect sparse results (1–3 per search term) |
+
+**Smart & Final selector notes**
+- Confirmed working in test run: 115 items scraped, 115 new products on first run
+- Search URL: `https://www.smartandfinal.com/sm/delivery/rsid/913/results?q=<item>`
+- Store ID in URL is `913` (SLO location)
+- Sale price shown as `was $X.XX` text inside the pricing container
+
+**California Fresh Market notes**
+- No product search — scrapes the weekly ad page only
+- Products vary week to week — not a consistent 15-item set
+- DOM uses Elementor page builder: `.e-loop-item` cards, price in `span.redPrice` with `.currency` and `.amount` child spans
+
+**Trader Joe's notes**
+- Search URL: `https://www.traderjoes.com/home/search?q=<item>&global=yes`
+- Search returns 100+ results mixing products, recipes, and other content
+- Must click the "Products" filter tab to isolate actual products
+- TJ's intentionally does not list all products online — sparse coverage expected
+
+**GitHub Actions workflow (`.github/workflows/scrape.yml`)**
+- Triggers every Sunday at 6am PT (`0 13 * * 0` in UTC)
+- Also supports manual trigger via `workflow_dispatch`
+- Passes all store ID secrets as env vars — missing secrets are safely skipped
+
+**New env vars added**
+```
+SMART_AND_FINAL_STORE_ID
+CAL_FRESH_STORE_ID
+TRADER_JOES_STORE_ID
+GROCERY_OUTLET_STORE_ID  (placeholder, scraper not yet built)
+```
+
+**Database — no schema changes needed**
+- Existing `stores`, `products`, `prices` schema supports multiple stores via `store_id` FK
+- New stores seeded via SQL `INSERT INTO stores` — UUIDs added to `.env`
+
+**Files added/modified**
+- `stores/smartandfinal.js` — new
+- `stores/calfresh.js` — new
+- `stores/traderjoes.js` — new
+- `stores/sprouts.js` — anti-bot improvements
+- `index.js` — multi-store refactor, `--run-once` flag, weekly cron
+- `.github/workflows/scrape.yml` — new
+- `GUIDE.md` — new user-facing setup guide
+- `.env.example` — updated with all new store ID vars

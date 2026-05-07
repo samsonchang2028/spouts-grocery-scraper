@@ -9,10 +9,10 @@ import { normalize, parsePrice } from './utils/normalize.js';
 import supabase from './utils/supabase.js';
 
 const SCRAPERS = [
-    // { name: 'Sprouts', scrape: scrapeSprouts, storeIdEnv: 'SPROUTS_STORE_ID' },
-    // { name: 'Smart & Final', scrape: scrapeSmartAndFinal, storeIdEnv: 'SMART_AND_FINAL_STORE_ID' },
-    // { name: 'California Fresh Market', scrape: scrapeCalFresh, storeIdEnv: 'CAL_FRESH_STORE_ID' },
-    // { name: "Trader Joe's", scrape: scrapeTraderJoes, storeIdEnv: 'TRADER_JOES_STORE_ID' },
+    { name: 'Sprouts', scrape: scrapeSprouts, storeIdEnv: 'SPROUTS_STORE_ID' },
+    { name: 'Smart & Final', scrape: scrapeSmartAndFinal, storeIdEnv: 'SMART_AND_FINAL_STORE_ID' },
+    { name: 'California Fresh Market', scrape: scrapeCalFresh, storeIdEnv: 'CAL_FRESH_STORE_ID' },
+    { name: "Trader Joe's", scrape: scrapeTraderJoes, storeIdEnv: 'TRADER_JOES_STORE_ID' },
     { name: 'Grocery Outlet', scrape: scrapeGroceryOutlet, storeIdEnv: 'GROCERY_OUTLET_STORE_ID' },
 ];
 
