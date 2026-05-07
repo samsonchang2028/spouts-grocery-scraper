@@ -56,12 +56,19 @@ cp .env.example .env
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-here
 SPROUTS_STORE_ID=your-sprouts-store-uuid-here
+GROCERY_OUTLET_STORE_ID=your-groceryoutlet-store-uuid-here
 ```
 
 To find `SPROUTS_STORE_ID`, run this query in your Supabase SQL editor after seeding the `stores` table:
 
 ```sql
 SELECT id FROM stores WHERE name = 'Sprouts' LIMIT 1;
+```
+
+To find `GROCERY_OUTLET_STORE_ID`:
+
+```sql
+SELECT id FROM stores WHERE name = 'Grocery Outlet' LIMIT 1;
 ```
 
 **4. Apply the database schema**
@@ -95,6 +102,10 @@ CREATE TABLE prices (
 -- Seed the Sprouts store row
 INSERT INTO stores (name, address)
 VALUES ('Sprouts', '1014 Madonna Rd, San Luis Obispo, CA');
+
+-- Seed the Grocery Outlet store row
+INSERT INTO stores (name, address)
+VALUES ('Grocery Outlet', '1314 Madonna Rd, San Luis Obispo, CA 93405');
 ```
 
 ---

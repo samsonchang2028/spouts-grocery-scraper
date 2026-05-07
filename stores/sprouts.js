@@ -10,20 +10,29 @@ chromium.use(StealthPlugin());
  */
 export const TARGET_LIST = [
     'eggs',
-    'whole milk'
+    'whole milk',
+    'chicken breast',
+    'bread',
+    'bananas',
 ];
 
-const USER_AGENT =
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+];
 
 const BASE_URL = 'https://shop.sprouts.com';
 
-/**
- * Waits a random delay between min and max milliseconds.
- */
-function randomDelay(min = 2000, max = 3000) {
+function randomDelay(min = 8000, max = 15000) {
     const ms = Math.floor(Math.random() * (max - min + 1)) + min;
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function randomUserAgent() {
+    return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
 /**
@@ -83,65 +92,59 @@ export async function scrape() {
     const results = [];
 
     try {
-        const context = await browser.newContext({ userAgent: USER_AGENT });
-        const page = await context.newPage();
-
         for (let i = 0; i < TARGET_LIST.length; i++) {
             const item = TARGET_LIST[i];
             const searchUrl = `${BASE_URL}/store/sprouts/s?k=${encodeURIComponent(item)}`;
 
+            // Fresh context per item — each search looks like a new browser session
+            const context = await browser.newContext({ userAgent: randomUserAgent() });
+            const page = await context.newPage();
+
             try {
                 const itemsResponses = [];
 
-                // Use route interception — fires synchronously before the response is consumed,
-                // so we never miss a response regardless of timing.
                 await page.route('**/graphql**', async (route, request) => {
                     const response = await route.fetch();
-                    const url = request.url();
-
-                    if (url.includes('operationName=Items')) {
+                    if (request.url().includes('operationName=Items')) {
                         try {
                             const body = await response.json().catch(() => null);
-                            if (body?.data?.items) {
-                                itemsResponses.push(body);
-                            }
+                            if (body?.data?.items) itemsResponses.push(body);
                         } catch (e) { }
                     }
-
                     await route.fulfill({ response });
                 });
 
                 await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-
-                // Wait for lazy-loaded Items calls to complete
                 await page.waitForTimeout(5000);
-
-                // Remove route handler before next iteration
-                await page.unroute('**/graphql**');
 
                 const products = extractProducts(itemsResponses, searchUrl);
 
                 if (products.length === 0) {
-                    console.warn(`[sprouts] No products found for "${item}"`);
+                    const title = await page.title().catch(() => '');
+                    const bodyText = await page.locator('body').innerText({ timeout: 2000 }).catch(() => '');
+                    const blocked = /access denied|robot|captcha|blocked|unusual traffic/i.test(title + bodyText);
+                    if (blocked) {
+                        console.warn(`[sprouts] BLOCKED (anti-bot) for "${item}" — page title: "${title}"`);
+                    } else {
+                        console.warn(`[sprouts] No products found for "${item}"`);
+                    }
                 } else {
                     results.push(...products);
                     console.log(`[sprouts] "${item}" → ${products.length} product(s) found`);
                 }
             } catch (err) {
                 console.warn(`[sprouts] Error processing "${item}": ${err.message}`);
-                // Clean up route handler on error
-                await page.unroute('**/graphql**').catch(() => { });
+            } finally {
+                await context.close();
             }
 
-            // Random delay between requests (skip after last item)
+            // Long random delay between requests (skip after last item)
             if (i < TARGET_LIST.length - 1) {
-                await randomDelay(2000, 3000);
+                await randomDelay(8000, 15000);
             }
         }
     } finally {
-        if (browser) {
-            await browser.close();
-        }
+        if (browser) await browser.close();
     }
 
     return results;
