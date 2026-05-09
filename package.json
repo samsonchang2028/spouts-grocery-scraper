@@ -1,7 +1,7 @@
 {
     "name": "slo-grocery-scraper",
     "version": "1.0.0",
-    "description": "Daily grocery price scraper for San Luis Obispo stores",
+    "description": "Weekly grocery price scraper for San Luis Obispo stores",
     "type": "module",
     "main": "index.js",
     "scripts": {
