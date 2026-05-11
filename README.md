@@ -1,24 +1,32 @@
 # SLO Grocery Scraper
 
-A standalone Node.js application that runs on a daily schedule, visits the [Sprouts Farmers Market](https://www.sprouts.com) website, extracts current grocery prices for 15 predefined items, and persists the results to a [Supabase](https://supabase.com) (Postgres) database.
+A Node.js application that runs on a weekly schedule, visits grocery store websites, extracts current prices, and persists the results to a [Supabase](https://supabase.com) (Postgres) database.
 
-This is a go/no-go pilot for San Luis Obispo grocery price tracking. If Sprouts scraping proves reliable, the system will be extended to cover Vons and Ralphs.
+Tracking grocery prices across San Luis Obispo stores. Currently scraping:
+
+| Store | Method |
+|---|---|
+| Sprouts Farmers Market | GraphQL interception (Instacart) |
+| Smart & Final | Playwright DOM scraping |
+| California Fresh Market | Playwright DOM scraping (weekly ad) |
+| Trader Joe's | Playwright DOM scraping |
+| Grocery Outlet | Playwright DOM scraping (Flipp weekly ad) — in progress |
 
 ---
 
 ## How it works
 
-The scraper follows a simple pipeline on each run:
-
 ```
 Schedule → Scrape → Normalize → Upsert → Log
 ```
 
-1. **Schedule** — `node-cron` triggers a run every day at 06:00 local time. An additional run fires immediately on startup.
-2. **Scrape** — Playwright launches a headless Chromium browser with stealth anti-detection. It searches Sprouts for each of the 15 target items sequentially, with a random 2–3 second delay between requests.
-3. **Normalize** — Raw product names are cleaned: trimmed, lowercased, stripped of special characters, and collapsed to single spaces.
+1. **Schedule** — `node-cron` triggers a run every Sunday at 06:00 local time. An additional run fires immediately on startup. Pass `--run-once` to run once and exit (used by GitHub Actions).
+2. **Scrape** — Each store scraper runs sequentially. Sprouts uses GraphQL response interception; others use Playwright DOM scraping with stealth anti-detection.
+3. **Normalize** — Raw product names are cleaned: trimmed, lowercased, stripped of special characters, collapsed to single spaces.
 4. **Upsert** — Each product is looked up in the `products` table with a case-insensitive match. If it doesn't exist, a new row is inserted. Either way, the UUID is used for the price record.
-5. **Log** — A summary is printed: `Sprouts: N items scraped, M new products added`.
+5. **Log** — A summary is printed per store: `<Store>: N items scraped, M new products added`.
+
+If a store's env var is not set, that store is skipped with a warning — the run continues for other stores.
 
 ---
 
@@ -26,7 +34,7 @@ Schedule → Scrape → Normalize → Upsert → Log
 
 - Node.js v18 or later
 - A Supabase project with the schema below applied
-- The `stores` table pre-seeded with a Sprouts row
+- The `stores` table pre-seeded with a row for each store you want to scrape
 
 ---
 
@@ -56,24 +64,21 @@ cp .env.example .env
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-here
 SPROUTS_STORE_ID=your-sprouts-store-uuid-here
+SMART_AND_FINAL_STORE_ID=your-smartandfinal-store-uuid-here
 GROCERY_OUTLET_STORE_ID=your-groceryoutlet-store-uuid-here
+CAL_FRESH_STORE_ID=your-calfresh-store-uuid-here
+TRADER_JOES_STORE_ID=your-traderjoes-store-uuid-here
 ```
 
-To find `SPROUTS_STORE_ID`, run this query in your Supabase SQL editor after seeding the `stores` table:
+To find a store's UUID after seeding:
 
 ```sql
-SELECT id FROM stores WHERE name = 'Sprouts' LIMIT 1;
+SELECT id, name FROM stores;
 ```
 
-To find `GROCERY_OUTLET_STORE_ID`:
-
-```sql
-SELECT id FROM stores WHERE name = 'Grocery Outlet' LIMIT 1;
-```
+Only set the env vars for stores you want to scrape. Missing vars are skipped gracefully.
 
 **4. Apply the database schema**
-
-Run the following SQL in your Supabase SQL editor:
 
 ```sql
 CREATE TABLE stores (
@@ -99,13 +104,13 @@ CREATE TABLE prices (
   source_url     TEXT
 );
 
--- Seed the Sprouts store row
-INSERT INTO stores (name, address)
-VALUES ('Sprouts', '1014 Madonna Rd, San Luis Obispo, CA');
-
--- Seed the Grocery Outlet store row
-INSERT INTO stores (name, address)
-VALUES ('Grocery Outlet', '1314 Madonna Rd, San Luis Obispo, CA 93405');
+-- Seed stores
+INSERT INTO stores (name, address) VALUES
+  ('Sprouts', '1014 Madonna Rd, San Luis Obispo, CA'),
+  ('Smart & Final', '1321 Johnson Ave, San Luis Obispo, CA'),
+  ('Grocery Outlet', '1314 Madonna Rd, San Luis Obispo, CA 93405'),
+  ('California Fresh Market', '771 E. Foothill Blvd, San Luis Obispo, CA'),
+  ('Trader Joe''s', '3977 S Higuera St, San Luis Obispo, CA');
 ```
 
 ---
@@ -118,18 +123,24 @@ npm start
 node index.js
 ```
 
-The process will:
-- Run one scrape immediately on startup
-- Stay alive and re-run every day at 06:00
+Run once and exit (e.g. for CI):
+
+```bash
+node index.js --run-once
+```
+
+The process will run one scrape immediately on startup, then stay alive and re-run every Sunday at 06:00.
 
 Expected console output per run:
 
 ```
 [scraper] Starting Sprouts scrape run...
-[sprouts] "eggs" → 3 product(s) found
-[sprouts] "whole milk" → 4 product(s) found
+[sprouts] "eggs" → 28 product(s) found
 ...
 Sprouts: 42 items scraped, 3 new products added
+[scraper] Starting Smart & Final scrape run...
+...
+Smart & Final: 115 items scraped, 0 new products added
 ```
 
 ---
@@ -140,7 +151,11 @@ Sprouts: 42 items scraped, 3 new products added
 .
 ├── index.js                  # Entry point — orchestrator, cron schedule
 ├── stores/
-│   └── sprouts.js            # Playwright scraper for Sprouts
+│   ├── sprouts.js            # GraphQL interception scraper (Instacart)
+│   ├── smartandfinal.js      # DOM scraper
+│   ├── calfresh.js           # DOM scraper (weekly ad)
+│   ├── traderjoes.js         # DOM scraper
+│   └── groceryoutlet.js      # Flipp weekly ad scraper (in progress)
 ├── utils/
 │   ├── normalize.js          # normalize() and parsePrice() pure functions
 │   └── supabase.js           # Supabase client with env-var validation
@@ -148,7 +163,10 @@ Sprouts: 42 items scraped, 3 new products added
 │   ├── normalize.test.js     # Unit + property tests for normalize/parsePrice
 │   ├── supabase.test.js      # Unit tests for env-var validation
 │   └── integration.test.js   # DB integration tests (requires live Supabase)
-├── .env.example              # Environment variable template
+├── .github/
+│   └── workflows/
+│       └── scrape.yml        # GitHub Actions — runs every Sunday at 6am PT
+├── .env.example
 └── package.json
 ```
 
@@ -160,7 +178,9 @@ Sprouts: 42 items scraped, 3 new products added
 
 Entry point. Exports `runScrape()` and registers the cron schedule.
 
-**`runScrape()`** — Orchestrates a full scraping run:
+**`SCRAPERS`** — Array of store configs. Each entry: `{ name, scrape, storeIdEnv }`. To add a new store, add one entry here and create a scraper file in `stores/`.
+
+**`runScrape()`** — Loops over `SCRAPERS`, skipping any whose env var is unset. For each active store:
 - Calls `scrape()` to get raw products
 - Normalizes names with `normalize()`
 - Parses prices with `parsePrice()` — skips products with unparseable prices
@@ -173,7 +193,11 @@ Entry point. Exports `runScrape()` and registers the cron schedule.
 
 ### `stores/sprouts.js`
 
-**`TARGET_LIST`** — The fixed array of 15 grocery items searched on every run:
+Scrapes [shop.sprouts.com](https://shop.sprouts.com) via **GraphQL response interception** using `page.route()`. The Instacart frontend loads product data via `operationName=Items` GraphQL queries — DOM scraping is not viable here due to hashed CSS class names.
+
+**Anti-bot measures:** rotating user agents, fresh browser context per item, 8–15s random delay between requests.
+
+**`TARGET_LIST`** — 15 grocery items searched on every run:
 
 | | | | |
 |---|---|---|---|
@@ -182,68 +206,63 @@ Entry point. Exports `runScrape()` and registers the cron schedule.
 | orange juice | cheddar cheese | butter | rice |
 | baby spinach | ground beef | oat milk | |
 
-**`scrape()`** — Launches a headless Chromium browser with the stealth plugin and a realistic user agent. For each item in `TARGET_LIST`:
-- Navigates to `https://www.sprouts.com/search?query=<item>`
-- Waits for product cards to appear (15s timeout)
-- Extracts `name`, `price`, `originalPrice`, and `sourceUrl` from each card
-- Waits a random 2–3 second delay before the next item
-- On timeout or missing cards: logs a warning and continues
+Returns `Promise<RawProduct[]>`.
 
-Returns `Promise<RawProduct[]>` where each `RawProduct` is:
+---
 
-```js
-{
-  name: string,           // raw product name from DOM
-  price: string,          // current price string, e.g. "$3.99"
-  originalPrice: string | null,  // regular price if on sale, else null
-  sourceUrl: string       // the search URL used
-}
-```
+### `stores/smartandfinal.js`
+
+Scrapes [smartandfinal.com](https://www.smartandfinal.com) using Playwright DOM scraping. Store ID `913` (SLO location). Searches the same 15-item `TARGET_LIST`.
+
+Selectors: `article[class*="ProductCard"]`, `h3[class*="ProductCardNameWrapper"]`, `[data-testid*="productCardPricing"]`.
+
+---
+
+### `stores/calfresh.js`
+
+Scrapes the weekly ad at [californiafresh.market](https://californiafresh.market). Does not search — scrapes all items from the weekly ad page. Products vary week to week.
+
+Selectors: `.e-loop-item` (Elementor cards), `h2.elementor-heading-title`, `span.redPrice`.
+
+---
+
+### `stores/traderjoes.js`
+
+Scrapes [traderjoes.com](https://www.traderjoes.com) using Playwright DOM scraping. Clicks the "Products" filter tab before extracting results. Searches the same 15-item `TARGET_LIST`.
+
+Note: Trader Joe's only lists a subset of products on their website — expect sparse results (1–3 per search term).
+
+Selectors: `article[class*="SearchResultCard"]`.
+
+---
+
+### `stores/groceryoutlet.js`
+
+Scrapes the Grocery Outlet weekly ad via [Flipp](https://flipp.com). **Currently in progress** — navigation and flyer ID extraction work, but item-level data extraction is not yet complete. See MEMORY.md for details.
 
 ---
 
 ### `utils/normalize.js`
 
-Pure functions with no side effects or I/O.
-
-**`normalize(raw: string): string`**
-
-Cleans a raw product name through this pipeline:
-1. Trim leading/trailing whitespace
-2. Convert to lowercase
-3. Remove all characters except `[a-z0-9 -]`
-4. Collapse multiple spaces into one
-5. Trim again
-
-The function is **idempotent**: `normalize(normalize(x)) === normalize(x)` for all inputs.
+**`normalize(raw: string): string`** — Cleans a raw product name: trim → lowercase → remove non-`[a-z0-9 -]` chars → collapse spaces → trim. Idempotent.
 
 ```js
 normalize('  Organic Baby Spinach  ')  // → 'organic baby spinach'
 normalize('Cheddar-Cheese!')           // → 'cheddar-cheese'
-normalize('')                          // → ''
 ```
 
-**`parsePrice(raw: string): number | null`**
-
-Strips non-numeric characters (except `.`), parses as a float, and rounds to 2 decimal places. Returns `null` if the result is not a valid number.
+**`parsePrice(raw: string): number | null`** — Strips non-numeric characters (except `.`), parses as float, rounds to 2 decimal places. Returns `null` if not a valid number.
 
 ```js
 parsePrice('$3.99')  // → 3.99
-parsePrice('12.5')   // → 12.5
-parsePrice('$0.00')  // → 0
 parsePrice('abc')    // → null
-parsePrice('')       // → null
 ```
 
 ---
 
 ### `utils/supabase.js`
 
-Initializes and exports the Supabase client. Reads credentials from environment variables and **throws at module load time** if either is missing — this causes the process to exit immediately with a clear error before any scraping begins.
-
-Required env vars:
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+Initializes and exports the Supabase client. Throws at module load time if `SUPABASE_URL` or `SUPABASE_SERVICE_ROLE_KEY` are missing.
 
 ---
 
@@ -280,6 +299,23 @@ Required env vars:
 
 ---
 
+## GitHub Actions
+
+The workflow at `.github/workflows/scrape.yml` runs every Sunday at 6:00 AM PT (`0 13 * * 0` UTC) and on manual trigger.
+
+Required repository secrets:
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SPROUTS_STORE_ID`
+- `SMART_AND_FINAL_STORE_ID`
+- `CAL_FRESH_STORE_ID`
+- `TRADER_JOES_STORE_ID`
+- `GROCERY_OUTLET_STORE_ID`
+
+Missing secrets are skipped gracefully — you don't need all of them set to run.
+
+---
+
 ## Testing
 
 ```bash
@@ -301,20 +337,7 @@ npx vitest run tests/integration.test.js
 | `tests/supabase.test.js` | Unit | 2 | Env-var validation at module load |
 | `tests/integration.test.js` | Integration | 2 | DB upsert idempotency, price record fields |
 
-**Property-based tests** use [fast-check](https://github.com/dubzzz/fast-check) with 100 iterations each:
-
-| Property | What it verifies |
-|---|---|
-| P1: Idempotent normalization | `normalize(normalize(s)) === normalize(s)` for any string |
-| P2: Lowercase output | `normalize(s) === normalize(s).toLowerCase()` for any string |
-| P3: Trims whitespace | Result has no leading or trailing whitespace |
-| P4: No special characters | Result matches `^[a-z0-9 -]*$` |
-| P5: Valid decimal for price strings | `parsePrice("$X.XX")` returns a finite number with ≤ 2 decimal places |
-| P6: Null for non-numeric strings | `parsePrice("abc...")` returns `null` |
-| P7: Upsert idempotency *(integration)* | Same product name inserted twice → one row, stable UUID |
-| P8: Price record completeness *(integration)* | All required fields present with correct types |
-
-Integration tests auto-skip when `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `SPROUTS_STORE_ID` are not set.
+Property-based tests use [fast-check](https://github.com/dubzzz/fast-check) with 100 iterations each. Integration tests auto-skip when Supabase env vars are not set.
 
 ---
 
@@ -323,6 +346,7 @@ Integration tests auto-skip when `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, an
 | Scenario | Behavior |
 |---|---|
 | Missing env var at startup | Throws immediately, process exits with clear message |
+| Store env var not set | Logs warning, skips that store, run continues |
 | Browser fails to launch | Logs error, skips run, cron stays alive |
 | Item search times out | Logs warning, skips item, run continues |
 | No product cards found | Logs warning, skips item, run continues |
@@ -349,8 +373,10 @@ Integration tests auto-skip when `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, an
 
 ## Debugging history
 
-See [MEMORY.md](./MEMORY.md) for a log of bugs encountered and how they were fixed, including:
+See [MEMORY.md](./MEMORY.md) for a log of bugs encountered and fixes applied, including:
 
-- Why the original DOM scraping approach failed and how it was replaced with GraphQL interception
+- Why DOM scraping failed for Sprouts and how it was replaced with GraphQL interception
 - How `dotenv` was added to fix missing environment variable errors
-- Notes on the Instacart GraphQL response structure for future maintenance
+- Notes on the Instacart GraphQL response structure
+- Multi-store expansion details and per-store selector notes
+- Grocery Outlet / Flipp scraping attempts and current status
