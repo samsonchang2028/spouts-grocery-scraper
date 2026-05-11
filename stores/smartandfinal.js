@@ -76,7 +76,7 @@ export async function scrape() {
 
                     cards.forEach((card) => {
                         const nameEl = card.querySelector('h3[class*="ProductCardNameWrapper"]');
-                        const name = nameEl?.textContent?.trim() || '';
+                        const name = (nameEl?.textContent?.trim() || '').replace(/open product description$/i, '').trim();
 
                         const pricingEl = card.querySelector('[data-testid*="productCardPricing"]');
                         if (!pricingEl) return;
